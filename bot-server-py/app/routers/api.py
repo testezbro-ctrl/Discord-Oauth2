@@ -5,10 +5,16 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from ..discord_api import fetch_eligible_guilds, send_channel_message
+from ..discord_api import (
+    derive_name_from_url,
+    fetch_eligible_guilds,
+    send_channel_message,
+    send_channel_message_with_file,
+)
 from ..guild_channels import resolve_channel_for_guild
 from ..jobs import create_job
 from ..sessions import get_session
+from ..video import convert_mp4_url_to_gif_bytes
 
 router = APIRouter(prefix="/api")
 
@@ -62,31 +68,38 @@ async def send(body: SendRequest, authorization: Optional[str] = Header(None)):
         )
 
     first = body.items[0]
-    first_name = first.name or "이모티콘"
+    first_name = first.name or derive_name_from_url(first.url)
     extra_count = len(body.items) - 1
 
-    payload = {
-        "embeds": [
-            {
-                "title": "이모티콘 데이터가 도착했습니다! ⠀⠀",
-                "color": 0x00FFF2,
-                "thumbnail": {"url": first.url},
-                "description": f"{first_name} 외 {extra_count}개\n이모지에 추가 하시겠습니까?",
-            }
-        ],
-        "components": [
-            {
-                "type": 1,
-                "components": [
-                    {"type": 2, "style": 3, "label": "적용", "custom_id": "g", "emoji": {"name": "🔻"}},
-                    {"type": 2, "style": 4, "label": "거부", "custom_id": "G1", "emoji": {"name": "❌"}},
-                ],
-            }
-        ],
+    embed = {
+        "title": "이모티콘 데이터가 도착했습니다! ⠀⠀",
+        "color": 0x00FFF2,
+        "description": f"{first_name} 외 {extra_count}개\n이모지에 추가 하시겠습니까?",
     }
 
+    components = [
+        {
+            "type": 1,
+            "components": [
+                {"type": 2, "style": 3, "label": "적용", "custom_id": "g", "emoji": {"name": "🔻"}},
+                {"type": 2, "style": 4, "label": "거부", "custom_id": "G1", "emoji": {"name": "❌"}},
+            ],
+        }
+    ]
+
     try:
-        message = await send_channel_message(channel_id, payload)
+        if first.kind == "video":
+            # 디스코드 임베드 썸네일은 mp4를 직접 못 띄웁니다. 미리 GIF로
+            # 변환해서 메시지에 파일로 첨부하고, 그 첨부파일을 썸네일로
+            # 가리키도록(attachment://) 합니다.
+            gif_bytes = await convert_mp4_url_to_gif_bytes(first.url)
+            embed["thumbnail"] = {"url": "attachment://thumb.gif"}
+            payload = {"embeds": [embed], "components": components}
+            message = await send_channel_message_with_file(channel_id, payload, "thumb.gif", gif_bytes)
+        else:
+            embed["thumbnail"] = {"url": first.url}
+            payload = {"embeds": [embed], "components": components}
+            message = await send_channel_message(channel_id, payload)
     except Exception as err:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(err)) from err
 

@@ -59,7 +59,7 @@ def _run_ffmpeg(mp4_path: str, gif_path: str, max_width: int, fps: int) -> None:
         raise RuntimeError(f"GIF 변환 실패: {stderr}")
 
 
-async def convert_mp4_url_to_gif_data_uri(url: str) -> str:
+async def convert_mp4_url_to_gif_bytes(url: str) -> bytes:
     mp4_bytes = await _download(url)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -71,13 +71,10 @@ async def convert_mp4_url_to_gif_data_uri(url: str) -> str:
         last_error: Exception | None = None
         for step in QUALITY_STEPS:
             try:
-                # ffmpeg 자체가 무거운 동기 작업이라, 이벤트 루프를 막지
-                # 않도록 별도 스레드에서 실행합니다.
                 await asyncio.to_thread(_run_ffmpeg, mp4_path, gif_path, step["max_width"], step["fps"])
                 gif_bytes = open(gif_path, "rb").read()
                 if len(gif_bytes) <= MAX_EMOJI_BYTES:
-                    b64 = base64.b64encode(gif_bytes).decode("ascii")
-                    return f"data:image/gif;base64,{b64}"
+                    return gif_bytes
                 last_error = RuntimeError(
                     f"{step['max_width']}px/{step['fps']}fps로도 {len(gif_bytes)}바이트라 256KB를 초과합니다."
                 )
@@ -85,3 +82,9 @@ async def convert_mp4_url_to_gif_data_uri(url: str) -> str:
                 last_error = err
 
         raise RuntimeError(f"GIF 변환/용량 축소에 실패했습니다: {last_error}")
+
+
+async def convert_mp4_url_to_gif_data_uri(url: str) -> str:
+    gif_bytes = await convert_mp4_url_to_gif_bytes(url)
+    b64 = base64.b64encode(gif_bytes).decode("ascii")
+    return f"data:image/gif;base64,{b64}"

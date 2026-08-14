@@ -11,7 +11,13 @@ from fastapi import APIRouter, HTTPException, Request
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
-from ..discord_api import create_guild_emoji, edit_channel_message, sanitize_emoji_name, url_to_data_uri
+from ..discord_api import (
+    create_guild_emoji,
+    derive_name_from_url,
+    edit_channel_message,
+    sanitize_emoji_name,
+    url_to_data_uri,
+)
 from ..guild_channels import set_channel_for_guild
 from ..jobs import delete_job, get_job, update_job
 from ..video import convert_mp4_url_to_gif_data_uri
@@ -144,7 +150,8 @@ async def process_job(message_id: str, job: dict) -> None:
     failed_names: list[str] = []
 
     for i, item in enumerate(items):
-        name = sanitize_emoji_name(item.get("name"), i + 1)
+        raw_name = item.get("name") or derive_name_from_url(item["url"])
+        name = sanitize_emoji_name(raw_name, i + 1)
         try:
             # 디스코드 이모지 API는 mp4(영상)를 직접 못 받습니다. video 항목은
             # 먼저 GIF로 변환한 뒤 업로드합니다.

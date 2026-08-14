@@ -2,13 +2,32 @@
 # 디스코드 REST API 호출 헬퍼. httpx.AsyncClient 사용.
 
 import base64
+import json
 import os
 import re
 import unicodedata
+from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
 API_BASE = "https://discord.com/api/v10"
+
+
+def derive_name_from_url(url: str) -> str:
+    # 이름(alt/title 등)을 못 찾았을 때 쓰는 폴백입니다. URL 경로의 마지막
+    # 조각(확장자 제외)을 기본으로 쓰고, PHP 엔드포인트처럼 경로가 다 같은
+    # 경우를 대비해 쿼리스트링의 식별자 값도 붙입니다.
+    try:
+        parsed = urlparse(url)
+        base = (parsed.path.rsplit("/", 1)[-1] or "이모티콘").rsplit(".", 1)[0]
+        if parsed.query:
+            params = dict(parse_qsl(parsed.query))
+            id_like = next((v for v in reversed(list(params.values())) if v.isalnum()), None)
+            if id_like:
+                return f"{base}-{id_like}"
+        return base
+    except Exception:  # noqa: BLE001
+        return "이모티콘"
 
 
 def _bot_headers() -> dict:
@@ -112,6 +131,24 @@ async def fetch_eligible_guilds(access_token: str) -> list:
 async def send_channel_message(channel_id: str, payload: dict) -> dict:
     res = await _discord_request(
         "POST", f"/channels/{channel_id}/messages", headers=_bot_headers(), json=payload
+    )
+    if res.status_code >= 400:
+        raise RuntimeError(f"메시지 전송 실패 (HTTP {res.status_code}): {res.text}")
+    return res.json()
+
+
+async def send_channel_message_with_file(
+    channel_id: str, payload: dict, filename: str, file_bytes: bytes, content_type: str = "image/gif"
+) -> dict:
+    # 임베드의 thumbnail.url을 "attachment://파일명" 으로 지정해두면, 이
+    # multipart 요청에 같이 첨부한 파일을 그대로 썸네일로 씁니다.
+    # (mp4 URL은 임베드 썸네일로 직접 못 쓰므로, 변환된 GIF를 파일로 첨부)
+    headers = {"Authorization": f"Bot {os.environ['DISCORD_BOT_TOKEN']}"}
+    files = {"files[0]": (filename, file_bytes, content_type)}
+    data = {"payload_json": json.dumps(payload, ensure_ascii=False)}
+
+    res = await _discord_request(
+        "POST", f"/channels/{channel_id}/messages", headers=headers, files=files, data=data
     )
     if res.status_code >= 400:
         raise RuntimeError(f"메시지 전송 실패 (HTTP {res.status_code}): {res.text}")
