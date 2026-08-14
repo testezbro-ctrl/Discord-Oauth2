@@ -54,7 +54,7 @@ async def send(body: SendRequest, authorization: Optional[str] = Header(None)):
     if not body.items:
         raise HTTPException(status_code=400, detail="items가 비어있습니다.")
 
-    channel_id = resolve_channel_for_guild(body.guildId)
+    channel_id = await resolve_channel_for_guild(body.guildId)
     if not channel_id:
         raise HTTPException(
             status_code=400,

@@ -60,7 +60,7 @@ async def interactions(request: Request):
         return {"type": PONG}
 
     if interaction["type"] == APPLICATION_COMMAND:
-        return handle_slash_command(interaction)
+        return await handle_slash_command(interaction)
 
     if interaction["type"] == MESSAGE_COMPONENT:
         message_id = interaction.get("message", {}).get("id")
@@ -98,7 +98,7 @@ async def interactions(request: Request):
     raise HTTPException(status_code=400, detail="지원하지 않는 interaction입니다.")
 
 
-def handle_slash_command(interaction: dict) -> dict:
+async def handle_slash_command(interaction: dict) -> dict:
     data = interaction.get("data", {})
     name = data.get("name")
 
@@ -114,7 +114,7 @@ def handle_slash_command(interaction: dict) -> dict:
                 "data": {"content": "⚠️ 채널을 지정해주세요.", "flags": EPHEMERAL},
             }
 
-        set_channel_for_guild(guild_id, channel_id)
+        await set_channel_for_guild(guild_id, channel_id)
         return {
             "type": CHANNEL_MESSAGE_WITH_SOURCE,
             "data": {
