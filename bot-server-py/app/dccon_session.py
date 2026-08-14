@@ -1,27 +1,33 @@
 # app/dccon_session.py
-# dccon.dcinside.com의 이미지 서버는 Referer 헤더만으로는 부족하고,
-# 먼저 세션 쿠키(ci_c)를 받아온 뒤 그 값을 package_detail API에 인증
-# 토큰(ci_t)으로 제출해야 실제 이미지에 접근할 수 있습니다.
-# (공개된 dccon 다운로더 스크립트의 흐름을 그대로 따랐습니다)
+# 처음엔 "쿠키 핸드셰이크가 이미지 요청에도 꼭 필요하다"고 가정하고 만들었는데,
+# 실제로 테스트해보니 대부분의 공개 디시콘 이미지는 Referer 헤더만으로도
+# 200이 떨어졌습니다 (핸드셰이크 있는 방식과 응답 크기까지 동일).
+# 그래서 구조를 이렇게 바꿨습니다:
+#   1차: Referer만으로 빠르게 시도 (대부분 이걸로 끝남)
+#   2차(폴백): 그래도 막히면(구매/비공개 디시콘 등 인증 필요한 경우 대비)
+#             세션 쿠키 핸드셰이크를 거쳐 재시도
 #
+# 핸드셰이크 흐름(2차 폴백에서만 사용):
 #   1) GET  https://dccon.dcinside.com/  → 응답 쿠키에서 ci_c 획득
 #   2) POST https://dccon.dcinside.com/index/package_detail
 #      (X-Requested-With: XMLHttpRequest)
-#      data={ci_t: ci_c값, package_idx: 팩 번호} → 이 시점부터 세션이
-#      그 팩의 이미지에 접근 가능한 상태가 됨
+#      data={ci_t: ci_c값, package_idx: 팩 번호}
 #   3) 그 세션(쿠키 유지)으로 실제 이미지 URL을 GET
+
+from typing import Optional
 
 import httpx
 
-from .discord_api import ensure_discord_safe_image
+from .discord_api import ensure_discord_safe_image, fetch_bytes_with_retry
 
 ROOT_URL = "https://dccon.dcinside.com/"
 PACKAGE_DETAIL_URL = "https://dccon.dcinside.com/index/package_detail"
+IMAGE_REFERER = "https://dccon.dcinside.com/hot/1"
 
 _XHR_HEADERS = {"X-Requested-With": "XMLHttpRequest"}
 
-# package_id -> httpx.AsyncClient (쿠키 유지). 같은 팩의 여러 이미지를
-# 받을 때 매번 핸드셰이크를 반복하지 않도록 잡(job) 실행 동안 캐싱합니다.
+# package_id -> httpx.AsyncClient (쿠키 유지). 폴백이 실제로 발생했을 때만
+# 만들어지고, 같은 팩의 다음 이미지부터는 재사용됩니다.
 _session_cache: dict[str, httpx.AsyncClient] = {}
 
 
@@ -47,14 +53,18 @@ async def get_dccon_session(package_id: str) -> httpx.AsyncClient:
     return client
 
 
-async def fetch_dccon_image_bytes(url: str, package_id: str) -> tuple[bytes, str]:
-    client = await get_dccon_session(package_id)
-    res = await client.get(url, headers={"Referer": "https://dccon.dcinside.com/hot/1"})
+async def fetch_dccon_image_bytes(url: str, package_id: Optional[str] = None) -> tuple[bytes, str]:
+    # 1차: 빠른 경로 (Referer만, 재시도 포함)
+    res = await fetch_bytes_with_retry(url, timeout=30, attempts=2)
+    if res.status_code >= 400 and package_id:
+        # 2차: 세션 핸드셰이크를 거쳐 한 번 더 시도
+        client = await get_dccon_session(package_id)
+        res = await client.get(url, headers={"Referer": IMAGE_REFERER})
+
     if res.status_code >= 400:
         raise RuntimeError(f"이미지를 가져오지 못했습니다 (HTTP {res.status_code})")
+
     data, _ext, mime = ensure_discord_safe_image(res.content)
-    if len(data) > 256 * 1024:
-        raise RuntimeError("이미지 용량이 256KB를 넘어 디스코드 이모지로 등록할 수 없습니다.")
     return data, mime
 
 

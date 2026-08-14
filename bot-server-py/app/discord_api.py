@@ -242,23 +242,33 @@ def ensure_discord_safe_image(data: bytes) -> tuple[bytes, str, str]:
     # 그런 경우 Pillow로 PNG(정지) 또는 GIF(애니메이션)로 변환합니다.
     fmt = sniff_image_format(data)
     if fmt in ("gif", "png", "jpg"):
-        mime = {"gif": "image/gif", "png": "image/png", "jpg": "image/jpeg"}[fmt]
-        return data, fmt, mime
-
-    try:
+        mime_map = {"gif": "image/gif", "png": "image/png", "jpg": "image/jpeg"}
+    else:
         from io import BytesIO
 
         from PIL import Image
 
-        img = Image.open(BytesIO(data))
-        buf = BytesIO()
-        if getattr(img, "is_animated", False):
-            img.save(buf, format="GIF", save_all=True)
-            return buf.getvalue(), "gif", "image/gif"
-        img.convert("RGBA").save(buf, format="PNG")
-        return buf.getvalue(), "png", "image/png"
-    except Exception as err:  # noqa: BLE001
-        raise RuntimeError(f"디스코드가 지원하지 않는 이미지 형식이고, 변환도 실패했습니다: {err}") from err
+        try:
+            img = Image.open(BytesIO(data))
+            buf = BytesIO()
+            if getattr(img, "is_animated", False):
+                img.save(buf, format="GIF", save_all=True)
+                data, fmt = buf.getvalue(), "gif"
+            else:
+                img.convert("RGBA").save(buf, format="PNG")
+                data, fmt = buf.getvalue(), "png"
+        except Exception as err:  # noqa: BLE001
+            raise RuntimeError(f"디스코드가 지원하지 않는 이미지 형식이고, 변환도 실패했습니다: {err}") from err
+        mime_map = {"gif": "image/gif", "png": "image/png"}
+
+    # 256KB를 넘으면(용량이 큰 GIF 등) 단계적으로 압축해서 맞춥니다.
+    if len(data) > 256 * 1024:
+        from .image_shrink import shrink_image_to_fit
+
+        data, fmt = shrink_image_to_fit(data, fmt)
+        mime_map = {"gif": "image/gif", "png": "image/png", "jpg": "image/jpeg"}
+
+    return data, fmt, mime_map[fmt]
 
 
 async def url_to_data_uri(url: str) -> str:
@@ -266,8 +276,6 @@ async def url_to_data_uri(url: str) -> str:
     if res.status_code >= 400:
         raise RuntimeError(f"이미지를 가져오지 못했습니다 (HTTP {res.status_code})")
     data, _ext, mime = ensure_discord_safe_image(res.content)
-    if len(data) > 256 * 1024:
-        raise RuntimeError("이미지 용량이 256KB를 넘어 디스코드 이모지로 등록할 수 없습니다.")
     b64 = base64.b64encode(data).decode("ascii")
     return f"data:{mime};base64,{b64}"
 

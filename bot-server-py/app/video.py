@@ -13,11 +13,9 @@ import subprocess
 import tempfile
 
 import httpx
-import imageio_ffmpeg
 
 from .discord_api import fetch_bytes_with_retry
-
-FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
+from .ffmpeg_util import FFMPEG_BIN
 
 MAX_EMOJI_BYTES = 256 * 1024  # 디스코드 이모지 용량 제한
 
