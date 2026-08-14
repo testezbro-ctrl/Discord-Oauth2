@@ -14,6 +14,7 @@ from nacl.signing import VerifyKey
 from ..discord_api import create_guild_emoji, edit_channel_message, sanitize_emoji_name, url_to_data_uri
 from ..guild_channels import set_channel_for_guild
 from ..jobs import delete_job, get_job, update_job
+from ..video import convert_mp4_url_to_gif_data_uri
 
 router = APIRouter()
 
@@ -145,7 +146,12 @@ async def process_job(message_id: str, job: dict) -> None:
     for i, item in enumerate(items):
         name = sanitize_emoji_name(item.get("name"), i + 1)
         try:
-            data_uri = await url_to_data_uri(item["url"])
+            # 디스코드 이모지 API는 mp4(영상)를 직접 못 받습니다. video 항목은
+            # 먼저 GIF로 변환한 뒤 업로드합니다.
+            if item.get("kind") == "video":
+                data_uri = await convert_mp4_url_to_gif_data_uri(item["url"])
+            else:
+                data_uri = await url_to_data_uri(item["url"])
             await create_guild_emoji(guild_id, name, data_uri)
             success_count += 1
         except Exception as err:  # noqa: BLE001
