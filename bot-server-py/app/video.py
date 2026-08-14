@@ -15,7 +15,7 @@ import tempfile
 import httpx
 import imageio_ffmpeg
 
-from .discord_api import fetch_headers
+from .discord_api import fetch_bytes_with_retry
 
 FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
 
@@ -34,8 +34,7 @@ MAX_DURATION_SECONDS = 4  # 너무 긴 영상은 앞부분만 잘라서 변환 (
 
 
 async def _download(url: str) -> bytes:
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-        res = await client.get(url, headers=fetch_headers(url))
+    res = await fetch_bytes_with_retry(url, timeout=60)
     if res.status_code >= 400:
         raise RuntimeError(f"영상을 가져오지 못했습니다 (HTTP {res.status_code})")
     return res.content

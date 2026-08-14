@@ -1,6 +1,7 @@
 # app/discord_api.py
 # 디스코드 REST API 호출 헬퍼. httpx.AsyncClient 사용.
 
+import asyncio
 import base64
 import json
 import os
@@ -14,9 +15,10 @@ API_BASE = "https://discord.com/api/v10"
 
 
 def fetch_headers(url: str) -> dict:
-    # dcinside(dccon) 등 일부 CDN은 Referer/User-Agent가 없는 서버발 요청을
-    # 핫링크 방지로 403 차단합니다. 실제 브라우저에서 보는 것과 비슷한
-    # 헤더를 붙여서 우회합니다.
+    # dcinside(dccon) 등 일부 CDN은 서버(데이터센터 IP)에서 오는 요청을
+    # 봇으로 의심해 403으로 막는 경우가 있습니다. 실제 브라우저 요청과
+    # 최대한 비슷하게 헤더를 채워 통과율을 높입니다. (100% 보장은 아니라,
+    # 아래 재시도 로직과 함께 씁니다)
     host = urlparse(url).hostname or ""
     if "dcinside.com" in host:
         referer = "https://dccon.dcinside.com/"
@@ -29,8 +31,30 @@ def fetch_headers(url: str) -> dict:
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         ),
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
         "Referer": referer,
+        "Sec-Fetch-Dest": "image",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Site": "same-site",
     }
+
+
+async def fetch_bytes_with_retry(url: str, timeout: float = 30, attempts: int = 3) -> httpx.Response:
+    # 일부 CDN은 서버발 요청을 간헐적으로만 차단합니다(요청마다 결과가 다를
+    # 수 있음). 바로 포기하지 않고 짧게 기다렸다가 몇 번 더 시도합니다.
+    last_res = None
+    for i in range(attempts):
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            res = await client.get(url, headers=fetch_headers(url))
+        if res.status_code < 400:
+            return res
+        last_res = res
+        if res.status_code in (403, 429) and i < attempts - 1:
+            await asyncio.sleep(0.8 * (i + 1))
+            continue
+        break
+    return last_res
 
 
 def derive_name_from_url(url: str) -> str:
@@ -200,17 +224,52 @@ async def create_guild_emoji(guild_id: str, name: str, image_data_uri: str) -> d
     return res.json()
 
 
+def sniff_image_format(data: bytes) -> str | None:
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def ensure_discord_safe_image(data: bytes) -> tuple[bytes, str, str]:
+    # 디스코드 커스텀 이모지 API는 PNG/JPEG/GIF만 받습니다 (webp 등은
+    # "Invalid Asset" 에러가 남). dccon은 webp로 서빙되는 경우가 있어서,
+    # 그런 경우 Pillow로 PNG(정지) 또는 GIF(애니메이션)로 변환합니다.
+    fmt = sniff_image_format(data)
+    if fmt in ("gif", "png", "jpg"):
+        mime = {"gif": "image/gif", "png": "image/png", "jpg": "image/jpeg"}[fmt]
+        return data, fmt, mime
+
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        img = Image.open(BytesIO(data))
+        buf = BytesIO()
+        if getattr(img, "is_animated", False):
+            img.save(buf, format="GIF", save_all=True)
+            return buf.getvalue(), "gif", "image/gif"
+        img.convert("RGBA").save(buf, format="PNG")
+        return buf.getvalue(), "png", "image/png"
+    except Exception as err:  # noqa: BLE001
+        raise RuntimeError(f"디스코드가 지원하지 않는 이미지 형식이고, 변환도 실패했습니다: {err}") from err
+
+
 async def url_to_data_uri(url: str) -> str:
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        res = await client.get(url, headers=fetch_headers(url))
+    res = await fetch_bytes_with_retry(url, timeout=30)
     if res.status_code >= 400:
         raise RuntimeError(f"이미지를 가져오지 못했습니다 (HTTP {res.status_code})")
-    content_type = res.headers.get("content-type", "image/gif")
-    data = res.content
+    data, _ext, mime = ensure_discord_safe_image(res.content)
     if len(data) > 256 * 1024:
         raise RuntimeError("이미지 용량이 256KB를 넘어 디스코드 이모지로 등록할 수 없습니다.")
     b64 = base64.b64encode(data).decode("ascii")
-    return f"data:{content_type};base64,{b64}"
+    return f"data:{mime};base64,{b64}"
 
 
 def sanitize_emoji_name(raw_name: str | None, fallback_index: int) -> str:
