@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
+from ..dccon_session import fetch_dccon_image_bytes
 from ..discord_api import (
     derive_name_from_url,
     fetch_eligible_guilds,
@@ -47,6 +48,7 @@ class CartItem(BaseModel):
     url: str
     kind: str = "image"
     name: Optional[str] = None
+    packageId: Optional[str] = None  # dccon 세션 인증에 필요 (dccon.dcinside.com/#174179 의 174179)
 
 
 class SendRequest(BaseModel):
@@ -88,14 +90,26 @@ async def send(body: SendRequest, authorization: Optional[str] = Header(None)):
     ]
 
     try:
+        file_bytes = None
+        filename = None
+        mime = None
+
         if first.kind == "video":
             # 디스코드 임베드 썸네일은 mp4를 직접 못 띄웁니다. 미리 GIF로
-            # 변환해서 메시지에 파일로 첨부하고, 그 첨부파일을 썸네일로
-            # 가리키도록(attachment://) 합니다.
-            gif_bytes = await convert_mp4_url_to_gif_bytes(first.url)
-            embed["thumbnail"] = {"url": "attachment://thumb.gif"}
+            # 변환해서 메시지에 파일로 첨부합니다.
+            file_bytes = await convert_mp4_url_to_gif_bytes(first.url)
+            filename, mime = "thumb.gif", "image/gif"
+        elif first.packageId:
+            # dccon 이미지는 세션 쿠키 없이 디스코드 서버가 직접 못 가져오므로
+            # (핫링크 방지), 우리가 세션을 거쳐 미리 받아서 파일로 첨부합니다.
+            file_bytes, mime = await fetch_dccon_image_bytes(first.url, first.packageId)
+            ext = {"image/gif": "gif", "image/png": "png", "image/jpeg": "jpg"}.get(mime, "gif")
+            filename = f"thumb.{ext}"
+
+        if file_bytes is not None:
+            embed["thumbnail"] = {"url": f"attachment://{filename}"}
             payload = {"embeds": [embed], "components": components}
-            message = await send_channel_message_with_file(channel_id, payload, "thumb.gif", gif_bytes)
+            message = await send_channel_message_with_file(channel_id, payload, filename, file_bytes, mime)
         else:
             embed["thumbnail"] = {"url": first.url}
             payload = {"embeds": [embed], "components": components}

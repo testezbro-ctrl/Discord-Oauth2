@@ -5,12 +5,14 @@
 # "https://그주소/interactions" 를 등록해야 디스코드가 여기로 요청을 보낼
 # 수 있습니다. (공인 도메인으로 직접 호스팅한다면 그 주소를 바로 쓰면 됩니다)
 
+import base64
 import os
 
 from fastapi import APIRouter, HTTPException, Request
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
+from ..dccon_session import fetch_dccon_image_bytes
 from ..discord_api import (
     create_guild_emoji,
     derive_name_from_url,
@@ -154,9 +156,14 @@ async def process_job(message_id: str, job: dict) -> None:
         name = sanitize_emoji_name(raw_name, i + 1)
         try:
             # 디스코드 이모지 API는 mp4(영상)를 직접 못 받습니다. video 항목은
-            # 먼저 GIF로 변환한 뒤 업로드합니다.
+            # 먼저 GIF로 변환한 뒤 업로드합니다. dccon 이미지는 세션 쿠키가
+            # 있어야 접근되므로(핫링크 방지) packageId가 있으면 그 경로를 씁니다.
             if item.get("kind") == "video":
                 data_uri = await convert_mp4_url_to_gif_data_uri(item["url"])
+            elif item.get("packageId"):
+                img_bytes, mime = await fetch_dccon_image_bytes(item["url"], item["packageId"])
+                b64 = base64.b64encode(img_bytes).decode("ascii")
+                data_uri = f"data:{mime};base64,{b64}"
             else:
                 data_uri = await url_to_data_uri(item["url"])
             await create_guild_emoji(guild_id, name, data_uri)
