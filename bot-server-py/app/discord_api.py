@@ -165,3 +165,16 @@ def sanitize_emoji_name(raw_name: str | None, fallback_index: int) -> str:
     if len(name) < 2:
         name = name.ljust(2, "_")
     return name[:32]
+
+
+# ---------- 슬래시 명령어 등록 ----------
+async def register_global_commands(commands: list) -> None:
+    app_id = os.environ["DISCORD_CLIENT_ID"]
+    async with httpx.AsyncClient(timeout=30) as client:
+        res = await client.put(
+            f"{API_BASE}/applications/{app_id}/commands",
+            headers=_bot_headers(),
+            json=commands,
+        )
+    if res.status_code >= 400:
+        raise RuntimeError(f"명령어 등록 실패 (HTTP {res.status_code}): {res.text}")

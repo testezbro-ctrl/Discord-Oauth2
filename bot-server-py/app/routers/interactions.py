@@ -12,6 +12,7 @@ from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
 from ..discord_api import create_guild_emoji, edit_channel_message, sanitize_emoji_name, url_to_data_uri
+from ..guild_channels import set_channel_for_guild
 from ..jobs import delete_job, get_job, update_job
 
 router = APIRouter()
@@ -19,11 +20,15 @@ router = APIRouter()
 TOTAL_BLOCKS = 7  # "■■■□□□□" 진행바 칸 수
 
 PING = 1
+APPLICATION_COMMAND = 2
 MESSAGE_COMPONENT = 3
 
 PONG = 1
+CHANNEL_MESSAGE_WITH_SOURCE = 4
 DEFERRED_UPDATE_MESSAGE = 6
 UPDATE_MESSAGE = 7
+
+EPHEMERAL = 64  # 명령어를 실행한 사람에게만 보이는 응답 플래그
 
 
 async def verify_discord_signature(request: Request) -> bytes:
@@ -52,6 +57,9 @@ async def interactions(request: Request):
 
     if interaction["type"] == PING:
         return {"type": PONG}
+
+    if interaction["type"] == APPLICATION_COMMAND:
+        return handle_slash_command(interaction)
 
     if interaction["type"] == MESSAGE_COMPONENT:
         message_id = interaction.get("message", {}).get("id")
@@ -87,6 +95,37 @@ async def interactions(request: Request):
             return {"type": DEFERRED_UPDATE_MESSAGE}
 
     raise HTTPException(status_code=400, detail="지원하지 않는 interaction입니다.")
+
+
+def handle_slash_command(interaction: dict) -> dict:
+    data = interaction.get("data", {})
+    name = data.get("name")
+
+    if name == "채널설정":
+        guild_id = interaction.get("guild_id")
+        options = data.get("options", [])
+        channel_option = next((opt for opt in options if opt.get("name") == "채널"), None)
+        channel_id = channel_option.get("value") if channel_option else None
+
+        if not guild_id or not channel_id:
+            return {
+                "type": CHANNEL_MESSAGE_WITH_SOURCE,
+                "data": {"content": "⚠️ 채널을 지정해주세요.", "flags": EPHEMERAL},
+            }
+
+        set_channel_for_guild(guild_id, channel_id)
+        return {
+            "type": CHANNEL_MESSAGE_WITH_SOURCE,
+            "data": {
+                "content": f"✅ 이 서버의 이모지 요청 채널을 <#{channel_id}> (으)로 설정했습니다.",
+                "flags": EPHEMERAL,
+            },
+        }
+
+    return {
+        "type": CHANNEL_MESSAGE_WITH_SOURCE,
+        "data": {"content": "알 수 없는 명령어예요.", "flags": EPHEMERAL},
+    }
 
 
 def progress_bar(percent: int) -> str:
