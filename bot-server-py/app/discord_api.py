@@ -13,6 +13,26 @@ import httpx
 API_BASE = "https://discord.com/api/v10"
 
 
+def fetch_headers(url: str) -> dict:
+    # dcinside(dccon) 등 일부 CDN은 Referer/User-Agent가 없는 서버발 요청을
+    # 핫링크 방지로 403 차단합니다. 실제 브라우저에서 보는 것과 비슷한
+    # 헤더를 붙여서 우회합니다.
+    host = urlparse(url).hostname or ""
+    if "dcinside.com" in host:
+        referer = "https://dccon.dcinside.com/"
+    elif "arca.live" in host:
+        referer = "https://arca.live/"
+    else:
+        referer = f"{urlparse(url).scheme}://{host}/"
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        ),
+        "Referer": referer,
+    }
+
+
 def derive_name_from_url(url: str) -> str:
     # 이름(alt/title 등)을 못 찾았을 때 쓰는 폴백입니다. URL 경로의 마지막
     # 조각(확장자 제외)을 기본으로 쓰고, PHP 엔드포인트처럼 경로가 다 같은
@@ -181,8 +201,8 @@ async def create_guild_emoji(guild_id: str, name: str, image_data_uri: str) -> d
 
 
 async def url_to_data_uri(url: str) -> str:
-    async with httpx.AsyncClient(timeout=30) as client:
-        res = await client.get(url)
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        res = await client.get(url, headers=fetch_headers(url))
     if res.status_code >= 400:
         raise RuntimeError(f"이미지를 가져오지 못했습니다 (HTTP {res.status_code})")
     content_type = res.headers.get("content-type", "image/gif")

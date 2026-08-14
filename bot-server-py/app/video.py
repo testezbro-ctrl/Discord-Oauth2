@@ -15,6 +15,8 @@ import tempfile
 import httpx
 import imageio_ffmpeg
 
+from .discord_api import fetch_headers
+
 FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
 
 MAX_EMOJI_BYTES = 256 * 1024  # 디스코드 이모지 용량 제한
@@ -32,8 +34,8 @@ MAX_DURATION_SECONDS = 4  # 너무 긴 영상은 앞부분만 잘라서 변환 (
 
 
 async def _download(url: str) -> bytes:
-    async with httpx.AsyncClient(timeout=60) as client:
-        res = await client.get(url)
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        res = await client.get(url, headers=fetch_headers(url))
     if res.status_code >= 400:
         raise RuntimeError(f"영상을 가져오지 못했습니다 (HTTP {res.status_code})")
     return res.content
