@@ -163,15 +163,7 @@ async def fetch_eligible_guilds(access_token: str) -> list:
     bot_guild_ids = {g["id"] for g in bot_guilds}
     result = []
     for g in user_guilds:
-        raw_perms = g.get("permissions", "0")
-        passed = can_manage_emojis(raw_perms)
-        # TODO(임시 진단용): 원인 확인되면 이 print는 지워도 됩니다.
-        print(
-            f"[guild-perm-debug] {g['name']!r} (id={g['id']}) "
-            f"raw_permissions={raw_perms!r} bin={bin(int(raw_perms))} "
-            f"bot_in_guild={g['id'] in bot_guild_ids} can_manage_emojis={passed}"
-        )
-        if g["id"] in bot_guild_ids and passed:
+        if g["id"] in bot_guild_ids and can_manage_emojis(g.get("permissions", "0")):
             icon = (
                 f"https://cdn.discordapp.com/icons/{g['id']}/{g['icon']}.png" if g.get("icon") else None
             )
