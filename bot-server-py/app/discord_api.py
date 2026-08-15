@@ -144,18 +144,18 @@ async def fetch_bot_guilds() -> list:
 
 
 ADMINISTRATOR = 0x8
-MANAGE_GUILD_EXPRESSIONS = 0x40000000  # 신규 권한 비트
-LEGACY_MANAGE_EMOJIS = 0x40
+MANAGE_GUILD_EXPRESSIONS = 0x40000000  # "표현 관리" (이모지/스티커/사운드보드 관리)
 
 
 def can_manage_emojis(permissions_str: str) -> bool:
+    # 정확히 "관리자" 또는 "표현 관리" 권한을 가진 경우만 통과시킵니다.
+    # (예전엔 실수로 0x40을 같이 체크했는데, 그건 "표현 관리"가 아니라
+    #  "반응 추가" 권한이라 아무 멤버나 통과되는 버그였습니다)
     try:
         perms = int(permissions_str)
     except (TypeError, ValueError):
         return False
-    return bool(
-        perms & ADMINISTRATOR or perms & MANAGE_GUILD_EXPRESSIONS or perms & LEGACY_MANAGE_EMOJIS
-    )
+    return bool(perms & ADMINISTRATOR or perms & MANAGE_GUILD_EXPRESSIONS)
 
 
 async def fetch_eligible_guilds(access_token: str) -> list:
@@ -163,7 +163,15 @@ async def fetch_eligible_guilds(access_token: str) -> list:
     bot_guild_ids = {g["id"] for g in bot_guilds}
     result = []
     for g in user_guilds:
-        if g["id"] in bot_guild_ids and can_manage_emojis(g.get("permissions", "0")):
+        raw_perms = g.get("permissions", "0")
+        passed = can_manage_emojis(raw_perms)
+        # TODO(임시 진단용): 원인 확인되면 이 print는 지워도 됩니다.
+        print(
+            f"[guild-perm-debug] {g['name']!r} (id={g['id']}) "
+            f"raw_permissions={raw_perms!r} bin={bin(int(raw_perms))} "
+            f"bot_in_guild={g['id'] in bot_guild_ids} can_manage_emojis={passed}"
+        )
+        if g["id"] in bot_guild_ids and passed:
             icon = (
                 f"https://cdn.discordapp.com/icons/{g['id']}/{g['icon']}.png" if g.get("icon") else None
             )
