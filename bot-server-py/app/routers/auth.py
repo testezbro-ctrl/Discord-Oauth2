@@ -11,13 +11,17 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..discord_api import exchange_code_for_token, fetch_discord_user
-from ..sessions import create_session
+from ..sessions import create_session, get_pending_login, register_pending_login
 
 router = APIRouter(prefix="/auth")
 
 
 @router.get("/discord/login")
-async def discord_login():
+async def discord_login(request: Request):
+    # loginId(state)는 확장 프로그램 패널이 "로그인 됐는지" polling으로
+    # 물어볼 때 쓰는 식별자입니다. 모바일 브라우저는 탭 이동 감지(chrome.tabs
+    # API)가 불안정한 경우가 있어서, polling 방식이 더 안정적입니다.
+    state = request.query_params.get("state", "")
     params = {
         "client_id": os.environ["DISCORD_CLIENT_ID"],
         "redirect_uri": os.environ["OAUTH_REDIRECT_URI"],
@@ -25,6 +29,8 @@ async def discord_login():
         "scope": "identify guilds",
         "prompt": "consent",
     }
+    if state:
+        params["state"] = state
     return RedirectResponse(f"https://discord.com/oauth2/authorize?{urlencode(params)}")
 
 
@@ -32,6 +38,7 @@ async def discord_login():
 async def discord_callback(request: Request):
     code = request.query_params.get("code")
     error = request.query_params.get("error")
+    state = request.query_params.get("state", "")
 
     if error:
         return HTMLResponse(
@@ -44,10 +51,20 @@ async def discord_callback(request: Request):
         token = await exchange_code_for_token(code)
         user = await fetch_discord_user(token["access_token"])
         session_id = create_session(token["access_token"], user)
+        if state:
+            register_pending_login(state, session_id, user["username"])
         query = urlencode({"sessionId": session_id, "username": user["username"]})
         return RedirectResponse(f"/auth/success?{query}")
     except Exception as err:  # noqa: BLE001
         return HTMLResponse(_render_result_page(False, f"로그인 처리 중 오류: {err}"), status_code=500)
+
+
+@router.get("/poll")
+async def poll_login(loginId: str):  # noqa: N803 (프론트와 맞춘 camelCase)
+    result = get_pending_login(loginId)
+    if result:
+        return {"ready": True, **result}
+    return {"ready": False}
 
 
 @router.get("/success")
